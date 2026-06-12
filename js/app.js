@@ -1,4 +1,5 @@
 // Alceuri app: foto → OCR (Tesseract.js, in-browser) → parser → ranking
+// + gedeelde cafédatabase (Supabase) voor alle gebruikers
 (function () {
   const fileInput = document.getElementById("file-input");
   const demoBtn = document.getElementById("demo-btn");
@@ -18,12 +19,6 @@
   // huidige lijst (scan + handmatige toevoegingen)
   let currentItems = [];
   let currentUnmatched = [];
-
-  // ── nep-bezoekersteller, uiteraard ─────────────────────────────
-  const counter = document.getElementById("visitor-counter");
-  const visits = (parseInt(localStorage.getItem("alceuri-visits") || "1336", 10) + 1);
-  localStorage.setItem("alceuri-visits", String(visits));
-  counter.textContent = String(visits).padStart(6, "0");
 
   // ── beeldvoorbewerking: grijswaarden + contrast, helpt Tesseract ──
   // invert=true voor kaarten met lichte tekst op donkere achtergrond
@@ -108,7 +103,7 @@
     panelResults.scrollIntoView({ behavior: "smooth" });
   }
 
-  // ── rendering ──────────────────────────────────────────────────
+  // ── rendering van de ranking ───────────────────────────────────
   const MEDALS = ["🥇", "🥈", "🥉"];
   const CAT_ICONS = { bier: "🍺", wijn: "🍷", schuimwijn: "🥂", aperitief: "🍸", sterk: "🥃", likeur: "🍶", cocktail: "🍹", "?": "❓" };
 
@@ -184,6 +179,202 @@
     d.textContent = s;
     return d.innerHTML;
   }
+
+  // ── gedeelde database (Supabase REST, gratis tier) ──────────────
+  const cafeNameInput = document.getElementById("cafe-name");
+  const cafeCityInput = document.getElementById("cafe-city");
+  const shareBtn = document.getElementById("share-btn");
+  const shareStatus = document.getElementById("share-status");
+  const communityList = document.getElementById("community-list");
+  const communityStatus = document.getElementById("community-status");
+  const citySearchInput = document.getElementById("city-search");
+
+  function sbConfig() {
+    const c = globalThis.ALCEURI_CONFIG || {};
+    return (c.SUPABASE_URL && c.SUPABASE_ANON_KEY) ? c : null;
+  }
+
+  async function sbRequest(path, opts = {}) {
+    const c = sbConfig();
+    const res = await fetch(c.SUPABASE_URL + "/rest/v1/" + path, {
+      ...opts,
+      headers: {
+        apikey: c.SUPABASE_ANON_KEY,
+        Authorization: "Bearer " + c.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+        ...(opts.headers || {}),
+      },
+    });
+    if (!res.ok) throw new Error("database-fout " + res.status);
+    return res.status === 201 || res.status === 204 ? null : res.json();
+  }
+
+  // GPS is altijd optioneel: eerst expliciet vragen, weigeren is prima
+  function askPosition(reason) {
+    if (!navigator.geolocation) return Promise.resolve(null);
+    if (!confirm(reason)) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+        () => resolve(null),
+        { timeout: 8000, maximumAge: 300000 }
+      );
+    });
+  }
+
+  function haversineKm(a, b) {
+    const R = 6371, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function notConfigured() {
+    communityStatus.textContent = "⚙️ De gedeelde database is nog niet verbonden (vul js/config.js in).";
+    return !sbConfig();
+  }
+
+  // ── scan delen ─────────────────────────────────────────────────
+  shareBtn.addEventListener("click", async () => {
+    const name = cafeNameInput.value.trim();
+    const city = cafeCityInput.value.trim();
+    shareStatus.classList.remove("hidden");
+    if (!sbConfig()) { shareStatus.textContent = "⚙️ Database nog niet verbonden (js/config.js)."; return; }
+    if (!currentItems.length) { shareStatus.textContent = "Scan eerst een kaart — er valt nog niets te delen!"; return; }
+    if (!name) { shareStatus.textContent = "Vul de naam van het café in."; cafeNameInput.focus(); return; }
+    if (!city) { shareStatus.textContent = "Vul de stad in — zo kan iedereen dit café terugvinden."; cafeCityInput.focus(); return; }
+
+    const pos = await askPosition(
+      "Wil je je GPS-locatie aan deze scan koppelen?\n\n" +
+      "Zo kunnen anderen dit café vinden met \"in de buurt\".\n" +
+      "Kies \"Annuleer\" om zonder locatie te delen (stad volstaat)."
+    );
+
+    shareBtn.disabled = true;
+    shareStatus.textContent = "🌍 Versturen...";
+    try {
+      await sbRequest("scans", {
+        method: "POST",
+        body: JSON.stringify({
+          cafe_name: name,
+          city,
+          lat: pos ? pos.lat : null,
+          lon: pos ? pos.lon : null,
+          items: currentItems,
+          best_score: currentItems[0].score,
+        }),
+      });
+      shareStatus.textContent = `✅ "${name}" (${city}) gedeeld met de wereld${pos ? " mét locatie" : ""}! 🎉`;
+      cafeNameInput.value = "";
+      loadTop(); // community-lijst meteen verversen
+    } catch (err) {
+      shareStatus.textContent = "⚠️ Delen mislukt (" + err.message + ") — probeer straks opnieuw.";
+    }
+    shareBtn.disabled = false;
+  });
+
+  // ── community doorzoeken ───────────────────────────────────────
+  // meerdere scans van hetzelfde café? de eerste in de lijst wint
+  // (volgorde van de query bepaalt dus: recentste of beste)
+  function dedupe(scans) {
+    const seen = new Set();
+    return scans.filter(s => {
+      const key = (s.cafe_name + "|" + s.city).toLowerCase().replace(/\s+/g, " ").trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function renderCommunity(scans, userPos, emptyMsg) {
+    communityList.innerHTML = "";
+    communityStatus.textContent = scans.length ? "" : emptyMsg;
+    scans.forEach((scan, i) => {
+      const li = document.createElement("li");
+      li.className = "cafe-item" + (i === 0 ? " best-nearby" : "");
+      const best = scan.items[0];
+      const dist = (userPos && scan.lat != null)
+        ? haversineKm(userPos, scan) : null;
+      const distTxt = dist != null
+        ? `<span class="cafe-dist">📍 ${dist < 1 ? Math.round(dist * 1000) + " m" : dist.toFixed(1) + " km"}</span> · ` : "";
+      li.innerHTML = `
+        <div>
+          <div class="cafe-name">${i === 0 ? "👑 " : ""}${esc(scan.cafe_name)} <span class="cafe-city">(${esc(scan.city)})</span></div>
+          <div class="cafe-detail">${distTxt}🏆 <b>${scan.best_score.toFixed(1)} ml/€</b>
+            (${esc(best.matchedName || best.displayName)}) · ${scan.items.length} ${scan.items.length === 1 ? "drank" : "dranken"} · ${scan.created_at.slice(0, 10)}</div>
+        </div>
+        <div class="cafe-actions"></div>`;
+      const openBtn = document.createElement("button");
+      openBtn.textContent = "📂 open";
+      openBtn.addEventListener("click", () => {
+        currentItems = scan.items.slice();
+        currentUnmatched = [];
+        render();
+        panelResults.scrollIntoView({ behavior: "smooth" });
+      });
+      li.querySelector(".cafe-actions").appendChild(openBtn);
+      communityList.appendChild(li);
+    });
+  }
+
+  async function searchCity() {
+    if (notConfigured()) return;
+    const q = citySearchInput.value.trim();
+    if (!q) { citySearchInput.focus(); return; }
+    communityStatus.textContent = "🔎 Zoeken in " + q + "...";
+    try {
+      // recentste scan per café wint, daarna rangschikken op score
+      const scans = dedupe(await sbRequest(
+        `scans?select=*&city=ilike.${encodeURIComponent("*" + q + "*")}&order=created_at.desc&limit=500`
+      ));
+      scans.sort((a, b) => b.best_score - a.best_score);
+      renderCommunity(scans, null, `Nog geen scans in "${q}" — wees de eerste! 🚀`);
+    } catch (err) {
+      communityStatus.textContent = "⚠️ Zoeken mislukt (" + err.message + ").";
+    }
+  }
+
+  document.getElementById("city-search-btn").addEventListener("click", searchCity);
+  citySearchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") searchCity(); });
+
+  document.getElementById("nearby-btn").addEventListener("click", async () => {
+    if (notConfigured()) return;
+    const pos = await askPosition("Mag Alceuri je locatie gebruiken om cafés in je buurt te vinden?");
+    if (!pos) {
+      communityStatus.textContent = "Geen locatie — zoek dan op stad hierboven. 🏙";
+      return;
+    }
+    communityStatus.textContent = "📍 Cafés in de buurt zoeken...";
+    try {
+      const scans = dedupe(await sbRequest(
+        "scans?select=*&lat=not.is.null&order=created_at.desc&limit=500"
+      ));
+      scans.sort((a, b) => haversineKm(pos, a) - haversineKm(pos, b));
+      renderCommunity(scans.slice(0, 25), pos, "Nog geen scans met locatie in de database.");
+    } catch (err) {
+      communityStatus.textContent = "⚠️ Zoeken mislukt (" + err.message + ").";
+    }
+  });
+
+  async function loadTop() {
+    if (notConfigured()) return;
+    communityStatus.textContent = "🏆 Wereldtop laden...";
+    try {
+      // beste score per café wint hier
+      const scans = dedupe(await sbRequest(
+        "scans?select=*&order=best_score.desc&limit=200"
+      )).slice(0, 25);
+      renderCommunity(scans, null, "Nog geen scans in de database — wees de allereerste! 🚀");
+    } catch (err) {
+      communityStatus.textContent = "⚠️ Laden mislukt (" + err.message + ").";
+    }
+  }
+  document.getElementById("top-btn").addEventListener("click", loadTop);
+
+  // bij het openen meteen de wereldtop tonen (als er verbinding is)
+  if (sbConfig()) loadTop(); else notConfigured();
 
   // ── events ─────────────────────────────────────────────────────
   fileInput.addEventListener("change", () => {

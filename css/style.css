@@ -266,6 +266,49 @@ main {
 .manual-grid #m-name { grid-column: 1 / -1; }
 .manual-grid button { grid-column: 1 / -1; }
 
+/* kaart bewaren */
+.save-cafe-grid { display: grid; gap: 10px; margin-top: 16px; }
+.save-cafe-grid input {
+  font-family: inherit; font-size: .95rem; padding: 10px;
+  border: 3px inset #999; background: #fffbe6; color: #000;
+}
+.save-status { margin: 0; }
+
+/* community */
+.btn-small { font-size: .8rem; padding: 8px 12px; }
+.search-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 12px 0 4px; }
+.search-row input {
+  font-family: inherit; font-size: .95rem; padding: 10px;
+  border: 3px inset #999; background: #fffbe6; color: #000;
+}
+.cafe-city { font-size: .8rem; color: var(--sun-yellow); font-weight: normal; }
+#cafes-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.cafe-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  background: rgba(0, 0, 0, .45);
+  border: 3px ridge #777;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.cafe-item.best-nearby {
+  border: 4px ridge gold;
+  animation: pulse-gold 1.6s ease-in-out infinite;
+}
+.cafe-name { font-weight: bold; color: var(--cyber-cyan); font-size: 1.05rem; }
+.cafe-detail { font-size: .8rem; color: #c9f; }
+.cafe-detail b { color: var(--lime); }
+.cafe-dist { color: var(--sun-yellow); }
+.cafe-actions { display: flex; flex-direction: column; gap: 6px; }
+.cafe-actions button {
+  font-family: inherit; font-size: .75rem; font-weight: bold;
+  background: var(--cyber-cyan); border: 2px outset #9ff; cursor: pointer;
+  padding: 4px 8px;
+}
+.cafe-actions button.del { background: #ff6666; border-color: #fbb; }
+
 /* footer */
 footer { text-align: center; padding-bottom: 24px; margin-top: 10px; }
 .counter { margin: 14px 0 4px; color: var(--cyber-cyan); }
