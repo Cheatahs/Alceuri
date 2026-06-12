@@ -1,0 +1,20 @@
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "17 9 */3 * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping database
+        env:
+          SUPABASE_URL: "https://viekhrxhyyzytywfsywk.supabase.co"
+          SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpZWtocnhoeXl6eXR5d2ZzeXdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEyMzc2OTIsImV4cCI6MjA5NjgxMzY5Mn0.JD3XcmEinOcx_Y13aM8xIZRScNoKAs5DdJdDYTlWhp8"
+        run: |
+          curl -sf "$SUPABASE_URL/rest/v1/scans?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" > /dev/null
+          echo "Database is wakker ✅"
