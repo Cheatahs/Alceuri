@@ -64,8 +64,8 @@
       const value = intPart + dec;
       if (value <= 0 || value > 250) continue;
       const cand = { value, index: m.index, length: whole.length, hasEuro };
-      // voorkeur: meest rechtse prijs; €-teken wint bij gelijke stand
-      if (!best || cand.index > best.index || (cand.hasEuro && !best.hasEuro)) best = cand;
+      // voorkeur: een bedrag mét €-teken, daarna het meest rechtse bedrag
+      if (!best || (cand.hasEuro && !best.hasEuro) || (cand.hasEuro === best.hasEuro && cand.index > best.index)) best = cand;
     }
     return best;
   }
@@ -87,12 +87,18 @@
   }
 
   // ── Naam matchen tegen de database ──────────────────────────────
+  // genormaliseerde namen + aliassen één keer vooraf berekenen
+  const DB_INDEX = DRINKS_DB.map(drink => ({
+    drink,
+    candidates: [drink.name, ...drink.aliases].map(normalize),
+  }));
+
   function matchDrink(rawName) {
     const name = normalize(rawName);
     if (!name || name.length < 3) return null;
+    const lineWords = name.split(" ");
     let best = null;
-    for (const drink of DRINKS_DB) {
-      const candidates = [drink.name, ...drink.aliases].map(normalize);
+    for (const { drink, candidates } of DB_INDEX) {
       for (const cand of candidates) {
         let score = similarity(name, cand);
         // ook proberen: kandidaat komt voor als deel van de regel
@@ -103,7 +109,6 @@
         // OCR-tolerante woordmatch: elk woord van de kandidaat komt ~fuzzy voor in de regel
         if (score < 0.8) {
           const candWords = cand.split(" ");
-          const lineWords = name.split(" ");
           const hits = candWords.filter(cw =>
             lineWords.some(lw => similarity(lw, cw) >= 0.8)
           ).length;
@@ -121,17 +126,29 @@
     return null;
   }
 
+  // Trefwoord-test op een genormaliseerde naam. Korte trefwoorden (en die met
+  // cijfers) moeten een los woord zijn: anders zit "gin" in "ginger ale" en
+  // "tea" in "steak". Langere trefwoorden mogen in een samenstelling staan
+  // ("huiswijn", "tripelbier").
+  function makeKeywordTest(keywords) {
+    const tests = keywords.map(kw => {
+      const k = normalize(kw);
+      return (k.length <= 3 || /\d/.test(k)) ? (n => n.includes(" " + k + " ")) : (n => n.includes(k));
+    });
+    return (name) => tests.some(t => t(name));
+  }
+
+  const nonAlcoholTest = makeKeywordTest(NON_ALCOHOL_KEYWORDS);
+  const fallbackTests = CATEGORY_FALLBACKS.map(fb => ({ fb, test: makeKeywordTest(fb.kw) }));
+
   function isNonAlcoholic(rawName) {
-    const name = " " + normalize(rawName) + " ";
-    return NON_ALCOHOL_KEYWORDS.some(kw => name.includes(" " + kw.trim() + " ") || name.includes(kw));
+    return nonAlcoholTest(" " + normalize(rawName) + " ");
   }
 
   function categoryFallback(rawName) {
     const name = " " + normalize(rawName) + " ";
-    for (const fb of CATEGORY_FALLBACKS) {
-      if (fb.kw.some(kw => name.includes(normalize(kw)))) return fb;
-    }
-    return null;
+    const hit = fallbackTests.find(f => f.test(name));
+    return hit ? hit.fb : null;
   }
 
   // ── Alceuri-score: ml pure alcohol per euro ─────────────────────

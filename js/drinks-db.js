@@ -176,7 +176,7 @@ const CATEGORY_FALLBACKS = [
   { kw: ["porto", "port", "sherry", "vermout", "vermouth", "pineau"], abv: 18.0, vol: 80, cat: "aperitief" },
   { kw: ["wijn", "wine", "vin", "chardonnay", "sauvignon", "merlot", "pinot", "riesling", "rioja", "malbec", "syrah", "cabernet", "rosé", "rose"], abv: 12.5, vol: 150, cat: "wijn" },
   { kw: ["spritz"], abv: 9.0, vol: 200, cat: "cocktail" },
-  { kw: ["cocktail", "mocktail- niet", "longdrink"], abv: 12.0, vol: 200, cat: "cocktail" },
+  { kw: ["cocktail", "longdrink"], abv: 12.0, vol: 200, cat: "cocktail" },
   { kw: ["jenever", "genever"], abv: 30.0, vol: 40, cat: "sterk" },
   { kw: ["gin", "vodka", "wodka", "whisky", "whiskey", "rum", "tequila", "cognac", "brandy", "armagnac", "calvados", "grappa", "eau de vie"], abv: 40.0, vol: 40, cat: "sterk" },
   { kw: ["likeur", "liqueur", "shot", "shooter"], abv: 25.0, vol: 40, cat: "likeur" },
@@ -187,9 +187,9 @@ const CATEGORY_FALLBACKS = [
 const NON_ALCOHOL_KEYWORDS = [
   "cola", "coca", "fanta", "sprite", "ice tea", "icetea", "fristi", "cecemel",
   "koffie", "coffee", "espresso", "cappuccino", "latte", "thee", "tea",
-  "water", "spa", "chaudfontaine", "bru ", "tonic", "limonade", "fruitsap",
+  "water", "spa", "chaudfontaine", "bru", "tonic", "limonade", "fruitsap",
   "appelsap", "sinaasappelsap", "jus d", "smoothie", "milkshake", "chocomelk",
-  "warme choco", "soep", "0.0", "0,0", "alcoholvrij", "alcoholvrije", "zonder alcohol",
+  "warme choco", "soep", "0.0", "0,0", "alcoholvrij", "alcoholvrije", "zonder alcohol", "mocktail", "virgin",
   "sportzot", "tourtel", "spuitwater", "plat water", "bruiswater", "red bull",
   "nalu", "aquarius", "schweppes", "gini", "looza", "minute maid", "oasis",
 ];
