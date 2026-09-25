@@ -1,5 +1,5 @@
 // Alceuri app: foto → OCR (Tesseract.js, in-browser) → parser → ranking
-// + gedeelde cafédatabase (Supabase) voor alle gebruikers
+// + gedeelde cafédatabase (Google Sheet via Apps Script) voor alle gebruikers
 (function () {
   const fileInput = document.getElementById("file-input");
   const demoBtn = document.getElementById("demo-btn");
@@ -22,11 +22,13 @@
 
   // ── beeldvoorbewerking: grijswaarden + contrast, helpt Tesseract ──
   // invert=true voor kaarten met lichte tekst op donkere achtergrond
+  // Kleine foto's worden vergroot, grote gsm-foto's (4000+ px) verkleind:
+  // dat maakt de OCR veel sneller zonder leesbaarheid te verliezen.
   function preprocessImage(img, invert) {
-    const maxW = 1600;
-    const scale = Math.min(1.6, maxW / img.naturalWidth);
-    const w = Math.round(img.naturalWidth * Math.max(scale, 1));
-    const h = Math.round(img.naturalHeight * Math.max(scale, 1));
+    const targetW = 2000;
+    const scale = Math.min(1.6, targetW / img.naturalWidth);
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
@@ -50,6 +52,23 @@
     progressFill.style.width = Math.round(frac * 100) + "%";
   }
 
+  // Tesseract.js (±5 MB met taaldata) pas laden bij de eerste scan,
+  // zodat de pagina zelf meteen opent.
+  let tesseractLoading = null;
+  function loadTesseract() {
+    if (globalThis.Tesseract) return Promise.resolve();
+    if (!tesseractLoading) {
+      tesseractLoading = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        s.onload = resolve;
+        s.onerror = () => { tesseractLoading = null; reject(new Error("OCR-bibliotheek niet geladen (offline?)")); };
+        document.head.appendChild(s);
+      });
+    }
+    return tesseractLoading;
+  }
+
   // ── OCR-flow ───────────────────────────────────────────────────
   async function scanImage(src) {
     previewImg.src = src;
@@ -57,15 +76,16 @@
     ocrStatus.classList.remove("hidden");
     setProgress("OCR-engine laden... (eerste keer duurt even)", 0.05);
 
-    const img = new Image();
-    await new Promise((res, rej) => {
-      img.onload = res;
-      img.onerror = rej;
-      img.src = src;
-    });
-
+    let worker = null;
     try {
-      const worker = await Tesseract.createWorker(["nld", "eng"], 1, {
+      const img = new Image();
+      await new Promise((res, rej) => {
+        img.onload = res;
+        img.onerror = () => rej(new Error("afbeelding niet leesbaar"));
+        img.src = src;
+      });
+      await loadTesseract();
+      worker = await Tesseract.createWorker(["nld", "eng"], 1, {
         logger: (m) => {
           if (m.status === "recognizing text") {
             setProgress("Kaart aan het lezen... 🤓", 0.15 + 0.7 * m.progress);
@@ -81,7 +101,6 @@
         const inv = await worker.recognize(preprocessImage(img, true));
         if (inv.data.confidence > data.confidence) data = inv.data;
       }
-      await worker.terminate();
 
       setProgress("Dranken herkennen...", 1);
       handleOcrText(data.text);
@@ -90,6 +109,8 @@
       statusText.textContent = "⚠️ Scannen mislukt: " + err.message + " — probeer een scherpere foto of voeg handmatig toe.";
       progressFill.style.width = "0%";
       return;
+    } finally {
+      if (worker) worker.terminate();
     }
     ocrStatus.classList.add("hidden");
   }
@@ -180,7 +201,7 @@
     return d.innerHTML;
   }
 
-  // ── gedeelde database (Supabase REST, gratis tier) ──────────────
+  // ── gedeelde database (Google Sheet + Apps Script, zie backend/Code.gs) ──
   const cafeNameInput = document.getElementById("cafe-name");
   const cafeCityInput = document.getElementById("cafe-city");
   const shareBtn = document.getElementById("share-btn");
@@ -189,25 +210,24 @@
   const communityStatus = document.getElementById("community-status");
   const citySearchInput = document.getElementById("city-search");
 
-  function sbConfig() {
-    const c = globalThis.ALCEURI_CONFIG || {};
-    return (c.SUPABASE_URL && c.SUPABASE_ANON_KEY) ? c : null;
+  function apiUrl() {
+    return (globalThis.ALCEURI_CONFIG || {}).API_URL || "";
   }
 
-  async function sbRequest(path, opts = {}) {
-    const c = sbConfig();
-    const res = await fetch(c.SUPABASE_URL + "/rest/v1/" + path, {
-      ...opts,
-      headers: {
-        apikey: c.SUPABASE_ANON_KEY,
-        Authorization: "Bearer " + c.SUPABASE_ANON_KEY,
-        "Content-Type": "application/json",
-        Prefer: "return=minimal",
-        ...(opts.headers || {}),
-      },
+  // GET met queryparameters, of POST met een JSON-body. De body gaat als
+  // text/plain mee: zo is het een "simple request" zonder CORS-preflight,
+  // wat Apps Script niet ondersteunt.
+  async function api(params, body) {
+    const url = apiUrl() + "?" + new URLSearchParams(params);
+    const res = await fetch(url, body === undefined ? {} : {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error("database-fout " + res.status);
-    return res.status === 201 || res.status === 204 ? null : res.json();
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data;
   }
 
   // GPS is altijd optioneel: eerst expliciet vragen, weigeren is prima
@@ -232,8 +252,9 @@
   }
 
   function notConfigured() {
+    if (apiUrl()) return false;
     communityStatus.textContent = "⚙️ De gedeelde database is nog niet verbonden (vul js/config.js in).";
-    return !sbConfig();
+    return true;
   }
 
   // ── scan delen ─────────────────────────────────────────────────
@@ -241,7 +262,7 @@
     const name = cafeNameInput.value.trim();
     const city = cafeCityInput.value.trim();
     shareStatus.classList.remove("hidden");
-    if (!sbConfig()) { shareStatus.textContent = "⚙️ Database nog niet verbonden (js/config.js)."; return; }
+    if (!apiUrl()) { shareStatus.textContent = "⚙️ Database nog niet verbonden (js/config.js)."; return; }
     if (!currentItems.length) { shareStatus.textContent = "Scan eerst een kaart — er valt nog niets te delen!"; return; }
     if (!name) { shareStatus.textContent = "Vul de naam van het café in."; cafeNameInput.focus(); return; }
     if (!city) { shareStatus.textContent = "Vul de stad in — zo kan iedereen dit café terugvinden."; cafeCityInput.focus(); return; }
@@ -255,16 +276,12 @@
     shareBtn.disabled = true;
     shareStatus.textContent = "🌍 Versturen...";
     try {
-      await sbRequest("scans", {
-        method: "POST",
-        body: JSON.stringify({
-          cafe_name: name,
-          city,
-          lat: pos ? pos.lat : null,
-          lon: pos ? pos.lon : null,
-          items: currentItems,
-          best_score: currentItems[0].score,
-        }),
+      await api({}, {
+        cafe_name: name,
+        city,
+        lat: pos ? pos.lat : null,
+        lon: pos ? pos.lon : null,
+        items: currentItems,
       });
       shareStatus.textContent = `✅ "${name}" (${city}) gedeeld met de wereld${pos ? " mét locatie" : ""}! 🎉`;
       cafeNameInput.value = "";
@@ -276,18 +293,7 @@
   });
 
   // ── community doorzoeken ───────────────────────────────────────
-  // meerdere scans van hetzelfde café? de eerste in de lijst wint
-  // (volgorde van de query bepaalt dus: recentste of beste)
-  function dedupe(scans) {
-    const seen = new Set();
-    return scans.filter(s => {
-      const key = (s.cafe_name + "|" + s.city).toLowerCase().replace(/\s+/g, " ").trim();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
+  // filteren, ontdubbelen per café en sorteren gebeurt in backend/Code.gs
   function renderCommunity(scans, userPos, emptyMsg) {
     communityList.innerHTML = "";
     communityStatus.textContent = scans.length ? "" : emptyMsg;
@@ -325,11 +331,7 @@
     if (!q) { citySearchInput.focus(); return; }
     communityStatus.textContent = "🔎 Zoeken in " + q + "...";
     try {
-      // recentste scan per café wint, daarna rangschikken op score
-      const scans = dedupe(await sbRequest(
-        `scans?select=*&city=ilike.${encodeURIComponent("*" + q + "*")}&order=created_at.desc&limit=500`
-      ));
-      scans.sort((a, b) => b.best_score - a.best_score);
+      const { scans } = await api({ mode: "city", q });
       renderCommunity(scans, null, `Nog geen scans in "${q}" — wees de eerste! 🚀`);
     } catch (err) {
       communityStatus.textContent = "⚠️ Zoeken mislukt (" + err.message + ").";
@@ -348,11 +350,8 @@
     }
     communityStatus.textContent = "📍 Cafés in de buurt zoeken...";
     try {
-      const scans = dedupe(await sbRequest(
-        "scans?select=*&lat=not.is.null&order=created_at.desc&limit=500"
-      ));
-      scans.sort((a, b) => haversineKm(pos, a) - haversineKm(pos, b));
-      renderCommunity(scans.slice(0, 25), pos, "Nog geen scans met locatie in de database.");
+      const { scans } = await api({ mode: "nearby", lat: pos.lat, lon: pos.lon });
+      renderCommunity(scans, pos, "Nog geen scans met locatie in de database.");
     } catch (err) {
       communityStatus.textContent = "⚠️ Zoeken mislukt (" + err.message + ").";
     }
@@ -362,10 +361,7 @@
     if (notConfigured()) return;
     communityStatus.textContent = "🏆 Wereldtop laden...";
     try {
-      // beste score per café wint hier
-      const scans = dedupe(await sbRequest(
-        "scans?select=*&order=best_score.desc&limit=200"
-      )).slice(0, 25);
+      const { scans } = await api({ mode: "top" });
       renderCommunity(scans, null, "Nog geen scans in de database — wees de allereerste! 🚀");
     } catch (err) {
       communityStatus.textContent = "⚠️ Laden mislukt (" + err.message + ").";
@@ -374,15 +370,15 @@
   document.getElementById("top-btn").addEventListener("click", loadTop);
 
   // bij het openen meteen de wereldtop tonen (als er verbinding is)
-  if (sbConfig()) loadTop(); else notConfigured();
+  loadTop();
 
   // ── events ─────────────────────────────────────────────────────
   fileInput.addEventListener("change", () => {
     const file = fileInput.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => scanImage(e.target.result);
-    reader.readAsDataURL(file);
+    if (previewImg.src.startsWith("blob:")) URL.revokeObjectURL(previewImg.src);
+    scanImage(URL.createObjectURL(file));
+    fileInput.value = ""; // zelfde foto opnieuw kiezen moet ook werken
   });
 
   // demo: een typische Vlaamse cafékaart als tekst, zodat je zonder foto kan testen

@@ -35,6 +35,28 @@ Niet-herkende regels verschijnen onderaan en kun je met één tik zelf een perce
 
 Elke gescande kaart kun je delen met alle gebruikers: cafénaam + stad zijn verplicht, GPS is optioneel en wordt altijd eerst gevraagd. Zoeken kan op drie manieren: op stad (geen GPS nodig), op afstand ("in de buurt", vraagt eerst toestemming), of de wereldtop. Meerdere scans van hetzelfde café worden samengevoegd.
 
-De data staat in een gratis [Supabase](https://supabase.com)-project (Postgres + REST API, geen kredietkaart nodig). Verbinden: vul `js/config.js` in met je Project URL en anon-sleutel. De anon-sleutel mag publiek zijn; Row Level Security op de tabel staat alleen lezen en toevoegen toe — wijzigen of verwijderen kan enkel via je eigen dashboard. De GitHub Action in `.github/workflows/keepalive.yml` pingt de database om de drie dagen zodat het gratis project niet pauzeert (vul daar dezelfde twee waarden in).
+De data staat in een gewone **Google Sheet**, met een klein Apps Script (`backend/Code.gs`) als API ervoor. Dat is gratis, heeft geen kredietkaart nodig en — anders dan de gratis Supabase-tier — pauzeert het nooit bij inactiviteit, dus er is geen keep-alive nodig. Moderatie is gewoon een rij verwijderen in de spreadsheet.
+
+### Eenmalig instellen (±5 minuten)
+
+1. Maak een nieuwe Google Sheet aan (bv. "Alceuri database").
+2. **Extensies → Apps Script**. Vervang de inhoud van `Code.gs` door die van `backend/Code.gs` en sla op.
+3. Kies bovenaan de functie `setup` en klik **Uitvoeren**. Geef de gevraagde rechten (je eigen account). Het tabblad `scans` verschijnt.
+4. **Implementeren → Nieuwe implementatie → Type: Web-app**
+   - Uitvoeren als: **Ik**
+   - Wie heeft toegang: **Iedereen**
+5. Kopieer de web-app-URL (eindigt op `/exec`) naar `API_URL` in `js/config.js`.
+
+Pas je `Code.gs` later aan, kies dan **Implementeren → Implementaties beheren → bewerken → Nieuwe versie**, zodat de URL dezelfde blijft.
+
+De backend controleert alles wat binnenkomt (lengtes, getallen, scores worden zelf herberekend), ontdubbelt per café en remt af bij meer dan 20 scans per minuut. Zonder `API_URL` werkt de app gewoon, alleen zonder gedeelde cafés.
+
+**Oude Supabase-data overzetten** (optioneel): exporteer de tabel `scans` als CSV in het Supabase-dashboard en plak de rijen in het tabblad `scans`, in de kolomvolgorde `id, created_at, cafe_name, city, lat, lon, best_score, items`.
+
+## Tests
+
+```sh
+node --test tests/*.test.js
+```
 
 Drink met mate(n). 🍻
